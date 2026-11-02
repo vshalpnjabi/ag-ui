@@ -725,6 +725,49 @@ public sealed class AGUIChatClientTest
         Assert.Null(updates.ToChatResponse().Usage);
     }
 
+    // https://github.com/ag-ui-protocol/ag-ui/issues/3272
+    // AGUI.Server serializes each ChatResponseUpdate onto the event's rawEvent, including
+    // custom AdditionalProperties. AGUIChatClient must map those back onto streamed updates
+    // so GetResponseAsync's coalesced ChatResponse/ChatMessage see them too.
+    [Fact]
+    public async Task GetStreamingResponse_SurfacesAdditionalPropertiesFromRawEvent()
+    {
+        var raw = JsonSerializer.SerializeToElement(
+            new ChatResponseUpdate(ChatRole.Assistant, "Hi")
+            {
+                AdditionalProperties = new AdditionalPropertiesDictionary
+                {
+                    ["MyProperty"] = "MyValue"
+                }
+            },
+            AIJsonUtilities.DefaultOptions.GetTypeInfo(typeof(ChatResponseUpdate)));
+
+        var transport = new StaticTransport(
+            new RunStartedEvent { ThreadId = "t1", RunId = "r1" },
+            new TextMessageStartEvent { MessageId = "m1", Role = "assistant", RawEvent = raw },
+            new TextMessageContentEvent { MessageId = "m1", Delta = "Hi", RawEvent = raw },
+            new TextMessageEndEvent { MessageId = "m1", RawEvent = raw },
+            new RunFinishedEvent { ThreadId = "t1", RunId = "r1" });
+        using var client = new AGUIChatClient(new() { Transport = transport });
+        var messages = new[] { new ChatMessage(ChatRole.User, "Hello!") };
+
+        var updates = new List<ChatResponseUpdate>();
+        await foreach (var u in client.GetStreamingResponseAsync(messages))
+        {
+            updates.Add(u);
+        }
+
+        Assert.Contains(updates, u =>
+            u.RawRepresentation is TextMessageContentEvent
+            && u.AdditionalProperties?.TryGetValue("MyProperty", out string? streamed) == true
+            && streamed == "MyValue");
+
+        var response = await client.GetResponseAsync(messages);
+        Assert.Contains(response.Messages, m =>
+            m.AdditionalProperties?.TryGetValue("MyProperty", out string? onMessage) == true
+            && onMessage == "MyValue");
+    }
+
     private sealed class CapturingTransport(params BaseEvent[] middleEvents) : IAGUITransport
     {
         public RunAgentInput? LastInput { get; private set; }
