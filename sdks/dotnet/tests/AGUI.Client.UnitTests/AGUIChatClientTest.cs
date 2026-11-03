@@ -728,7 +728,10 @@ public sealed class AGUIChatClientTest
     // https://github.com/ag-ui-protocol/ag-ui/issues/3272
     // AGUI.Server serializes each ChatResponseUpdate onto the event's rawEvent, including
     // custom AdditionalProperties. AGUIChatClient must map those back onto streamed updates
-    // so GetResponseAsync's coalesced ChatResponse/ChatMessage see them too.
+    // so GetStreamingResponseAsync exposes them and ToChatResponse hoists them onto the
+    // coalesced ChatMessage. MEAI routes properties by MessageId (dotnet/extensions#7194):
+    // TEXT_MESSAGE_* updates have ids so user keys land on ChatMessage; id-less updates
+    // such as RUN_STARTED land on ChatResponse (here: agui_thread_id).
     [Fact]
     public async Task GetStreamingResponse_SurfacesAdditionalPropertiesFromRawEvent()
     {
@@ -766,6 +769,7 @@ public sealed class AGUIChatClientTest
         Assert.Contains(response.Messages, m =>
             m.AdditionalProperties?.TryGetValue("MyProperty", out string? onMessage) == true
             && onMessage == "MyValue");
+        Assert.Equal("t1", response.AdditionalProperties?["agui_thread_id"]);
     }
 
     private sealed class CapturingTransport(params BaseEvent[] middleEvents) : IAGUITransport
